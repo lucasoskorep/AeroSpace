@@ -12,6 +12,11 @@ func normalizeLayoutReason() async throws {
 private func validateStillPopups() async throws {
     for node in macosPopupWindowsContainer.children {
         let popup = (node as! MacWindow)
+        // Background tabs in native macOS tab groups are stored in
+        // the popup container. Only promote them back to real
+        // windows when they become visible on-screen (i.e. the
+        // user switched to that tab).
+        if !isWindowOnScreen(popup.windowId) { continue }
         let windowLevel = getWindowLevel(for: popup.windowId)
         if try await popup.isWindowHeuristic(windowLevel, .cancellable) {
             try await popup.relayoutWindow(on: focus.workspace, .cancellable)
@@ -23,10 +28,16 @@ private func validateStillPopups() async throws {
 @MainActor
 private func _normalizeLayoutReason(workspace: Workspace, windows: [Window]) async throws {
     for window in windows {
+        let macWindow = window as! MacWindow
         let isMacosFullscreen = try await window.isMacosFullscreen(.cancellable)
         let isMacosMinimized = try await (!isMacosFullscreen).andAsync { @MainActor @Sendable in try await window.isMacosMinimized(.cancellable) }
         let isMacosWindowOfHiddenApp = !isMacosFullscreen && !isMacosMinimized &&
             !config.automaticallyUnhideMacosHiddenApps && window.macAppUnsafe.nsApp.isHidden
+        // A window that is not on-screen, not minimized, not
+        // fullscreen, and whose app is not hidden is a background
+        // tab in a native macOS tab group.
+        let isBackgroundTab = !isMacosFullscreen && !isMacosMinimized && !isMacosWindowOfHiddenApp &&
+            !isWindowOnScreen(macWindow.windowId)
         switch window.layoutReason {
             case .standard:
                 guard let parent = window.parent else { continue }
@@ -40,6 +51,10 @@ private func _normalizeLayoutReason(workspace: Workspace, windows: [Window]) asy
                     case isMacosWindowOfHiddenApp:
                         window.layoutReason = .macos(prevParentKind: parent.kind)
                         window.bind(to: workspace.macOsNativeHiddenAppsWindowsContainer, adaptiveWeight: WEIGHT_DOESNT_MATTER, index: INDEX_BIND_LAST)
+                    case isBackgroundTab:
+                        // Move background tabs to the popup container
+                        // so they don't occupy tiling space.
+                        window.bind(to: macosPopupWindowsContainer, adaptiveWeight: WEIGHT_AUTO, index: INDEX_BIND_LAST)
                     default: break
                 }
             case .macos(let prevParentKind):
