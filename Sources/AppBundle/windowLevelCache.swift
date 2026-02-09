@@ -10,6 +10,16 @@ private var cache: [UInt32: MacOsWindowLevel] = [:]
 @MainActor
 private var onScreenWindowIds: Set<UInt32> = []
 
+/// Set of all window IDs known to the system, across all Spaces.
+/// Populated from CGWindowList WITHOUT optionOnScreenOnly.
+@MainActor
+private var allSystemWindowIds: Set<UInt32> = []
+
+/// Window IDs that AX reports as alive during the current refresh.
+/// AX returns background tabs but NOT windows on inactive Spaces.
+@MainActor
+private var axAliveWindowIds: Set<UInt32> = []
+
 @MainActor
 func getWindowLevel(for windowId: UInt32) -> MacOsWindowLevel? {
     if let existing = cache[windowId] { return existing }
@@ -23,6 +33,29 @@ func getWindowLevel(for windowId: UInt32) -> MacOsWindowLevel? {
 @MainActor
 func isWindowOnScreen(_ windowId: UInt32) -> Bool {
     return onScreenWindowIds.contains(windowId)
+}
+
+/// Returns true if the window exists anywhere in the system
+/// (any Space, any state). Uses CGWindowList without
+/// optionOnScreenOnly.
+@MainActor
+func isWindowAliveInSystem(_ windowId: UInt32) -> Bool {
+    return allSystemWindowIds.contains(windowId)
+}
+
+/// Store the AX-alive window IDs for the current refresh cycle.
+@MainActor
+func setAxAliveWindowIds(_ ids: Set<UInt32>) {
+    axAliveWindowIds = ids
+}
+
+/// Returns true if AX considers the window alive (returned by
+/// kAXWindowsAttribute during the current refresh cycle).
+/// Background tabs return true; inactive-Space windows return
+/// false.
+@MainActor
+func isWindowAxAlive(_ windowId: UInt32) -> Bool {
+    return axAliveWindowIds.contains(windowId)
 }
 
 /// Refresh the on-screen window cache. Call this once at the start
@@ -52,6 +85,19 @@ private func refreshCGWindowListCache() {
     }
     cache = levelResult
     onScreenWindowIds = onScreenResult
+
+    // All-windows query (includes windows on inactive Spaces).
+    var allResult: Set<UInt32> = []
+    let allOptions = CGWindowListOption(arrayLiteral: .excludeDesktopElements)
+    if let cfArray = CGWindowListCopyWindowInfo(allOptions, CGWindowID(0)) as? [CFDictionary] {
+        for elem in cfArray {
+            let dict = elem as NSDictionary
+            guard let _windowId = dict[kCGWindowNumber] else { continue }
+            let windowId = ((_windowId as! CFNumber) as NSNumber).uint32Value
+            allResult.insert(windowId)
+        }
+    }
+    allSystemWindowIds = allResult
 }
 
 enum MacOsWindowLevel: Sendable, Equatable {
