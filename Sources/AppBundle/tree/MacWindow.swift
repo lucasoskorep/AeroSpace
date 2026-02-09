@@ -224,6 +224,7 @@ private func unbindAndGetBindingDataForNewWindow(_ windowId: UInt32, _ macApp: M
     // states also make windows not-on-screen but should be handled
     // by normalizeLayoutReason instead.
     if !isWindowOnScreen(windowId),
+       isWindowAxAlive(windowId),
        try await macApp.isMacosNativeMinimized(windowId, cm) != true,
        try await macApp.isMacosNativeFullscreen(windowId, cm) != true,
        !macApp.nsApp.isHidden
