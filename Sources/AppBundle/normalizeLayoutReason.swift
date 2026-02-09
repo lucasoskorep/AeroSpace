@@ -12,7 +12,6 @@ var suspendedWindowSlots: [UInt32: BindingData] = [:]
 
 @MainActor
 func normalizeLayoutReason() async throws {
-    demotedTabSlots = [:]
     for workspace in Workspace.all {
         let windows: [Window] = workspace.allLeafWindowsRecursive
         try await _normalizeLayoutReason(workspace: workspace, windows: windows)
@@ -33,7 +32,8 @@ private func validateStillPopups() async throws {
         if !isWindowOnScreen(popup.windowId) { continue }
         let windowLevel = getWindowLevel(for: popup.windowId)
         if try await popup.isWindowHeuristic(windowLevel, .cancellable) {
-            if let slot = suspendedWindowSlots.removeValue(forKey: popup.windowId) {
+            let suspendedSlot = suspendedWindowSlots.removeValue(forKey: popup.windowId)
+            if let slot = suspendedSlot, slot.parent.kind != .macosPopupWindowsContainer {
                 // Restore window to its original tiling position
                 // after returning from an inactive macOS Space.
                 popup.unbindFromParent()
@@ -57,12 +57,13 @@ private func _normalizeLayoutReason(workspace: Workspace, windows: [Window]) asy
         let isMacosMinimized = try await (!isMacosFullscreen).andAsync { @MainActor @Sendable in try await window.isMacosMinimized(.cancellable) }
         let isMacosWindowOfHiddenApp = !isMacosFullscreen && !isMacosMinimized &&
             !config.automaticallyUnhideMacosHiddenApps && window.macAppUnsafe.nsApp.isHidden
-        // A background tab is not on screen but IS reported by AX
-        // as alive. Windows on inactive Spaces are also not on
-        // screen but are NOT AX-alive — leave those in place.
+        // A window that is not on-screen, not minimized, not
+        // fullscreen, and whose app is not hidden is a background
+        // tab in a native macOS tab group. (Inactive-Space windows
+        // are already suspended to the popup container by the GC
+        // loop in refresh() before this runs.)
         let isBackgroundTab = !isMacosFullscreen && !isMacosMinimized && !isMacosWindowOfHiddenApp &&
-            !isWindowOnScreen(macWindow.windowId) &&
-            isWindowAxAlive(macWindow.windowId)
+            !isWindowOnScreen(macWindow.windowId)
         switch window.layoutReason {
             case .standard:
                 guard let parent = window.parent else { continue }
