@@ -129,9 +129,20 @@ private func refresh() async throws {
     // Garbage collect terminated apps and windows before working with all windows
     let mapping = try await MacApp.refreshAllAndGetAliveWindowIds(frontmostAppBundleId: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
     let aliveWindowIds = mapping.values.flatMap(id).toSet()
+    setAxAliveWindowIds(aliveWindowIds)
 
     for window in MacWindow.allWindows {
         if !aliveWindowIds.contains(window.windowId) {
+            // Window exists in the system but AX can't see it.
+            // This happens for windows on inactive macOS Spaces.
+            // Suspend: save tiling position and move to popup
+            // container so it doesn't disrupt visible layout.
+            if isWindowAliveInSystem(window.windowId) {
+                let bindingData = window.unbindFromParent()
+                suspendedWindowSlots[window.windowId] = bindingData
+                window.bind(to: macosPopupWindowsContainer, adaptiveWeight: WEIGHT_AUTO, index: INDEX_BIND_LAST)
+                continue
+            }
             window.garbageCollect(skipClosedWindowsCache: false)
         }
     }
